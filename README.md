@@ -5,5 +5,5 @@ Simple tool to convert any file to C header
 ## Usage
 
 ```
-python3 nofile.py <file1> <file2> ...
+python3 nofile.py <file> ...
 ```
