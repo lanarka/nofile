@@ -1,78 +1,90 @@
-# Options
-output_filename = "files.h"
-var_type = "const uint8_t"
-prefix = "NOFILE_"
-# /Options
 
-import sys
-import time, datetime
-from hashlib import sha256
+import sys, os
+import hashlib
 
-ts = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
-sha = lambda data: sha256(data.encode('utf-8')).hexdigest()
+def to_c_identifier(name):
+    return os.path.basename(name).replace(".", "_").replace("-", "_")
 
-class Nofile:
-	def __init__(self, files):
-		print(files)
-		self.files = files
+def sha256_hex(data):
+    return hashlib.sha256(data).hexdigest()
 
-	def proc_file(self, filename):
-		data = list(self.load_file(filename))
-		done = ""
-		per_line = 0
-		i = 0
-		for b in data:
-			i += 1
-			if per_line > 15:
-				done +="\n "
-				per_line = 0
-			comma = " " if (len(data)==i) else ","
-			done += "0x%02x%s" % (b,comma)
-			per_line +=1
-		return done
+def generate_header(identifier, filename, size, hash_hex, cpp_mode):
+    guard = identifier.upper() + "_H"
+    cpp_begin = 'extern "C" {\n' if cpp_mode else ""
+    cpp_end = '}\n' if cpp_mode else ""
+    return f"""#ifndef {guard}
+#define {guard}
 
-	def load_file(self, filename):
-		fh = open(filename, "rb")
-		data = fh.read()
-		fh.close()
-		return data
+/*
+ * Generated from file: {filename}
+ * Size: {size} bytes
+ * SHA-256: {hash_hex}
+ */
 
-	def proc_list(self, i, name):
-		data = self.load_file(name)
-		done = "/*** #%d: %s (%s Bytes) ***/\n" % (i, name, len(data))
-		done += "#define %sNAME_%s \"%s\"\n" % (prefix, i, name)
-		done += "#define %sHASH_%s 0x%s\n" % (prefix, i, sha(name))
-		done += "#define %sSIZE_%s %s\n" % (prefix, i, len(data))
-		done += "%s %sDATA_%s[] = {\n %s\n};\n\n" % (var_type, prefix, i, self.proc_file(name))
-		done += "\n"
-		return done
+#include <stddef.h>
 
-	def to_source(self):
-		done=  "\n// Generated file do not modify !!!"
-		done+= "\n// Timestamp: %s\n\n" % ts
-		done+= "#ifndef __FILES_H__\n"
-		done+= "#define __FILES_H__\n\n"
-		count = total = 0
-		for file in self.files:
-			data = self.proc_list(count, file.strip())
-			done += data
-			total += len(data)
-			count += 1
-		done +="#endif\n"
-		fh = open(output_filename, "w")
-		fh.write(done)
-		fh.close()
-		print("* Done: Total data size: %d Bytes" % total)
+#ifdef __cplusplus
+{cpp_begin}
+#endif
 
+extern const unsigned char {identifier}[];
+extern const size_t {identifier}_len;
+extern const char {identifier}_sha256[];
 
-def nofile(list_of_files):
-	nf = Nofile(list_of_files)
-	nf.to_source()
+#define {identifier.upper()}_SIZE {size}
 
-if __name__ == '__main__':
-	if len(sys.argv) < 2:
-		print("Usage: %s <file> ..." % sys.argv[0])
-		sys.exit()
-	if len(sys.argv) > 1:
-		files = sys.argv[1:]
-		nofile(files)
+#ifdef __cplusplus
+{cpp_end}
+#endif
+
+#endif /* {guard} */
+"""
+
+def generate_source(identifier, data, hash_hex):
+    hex_lines = []
+    for i in range(0, len(data), 12):
+        chunk = data[i:i+12]
+        line = ", ".join(f"0x{b:02X}" for b in chunk)
+        hex_lines.append("    " + line)
+    hex_text = ",\n".join(hex_lines)
+    return f"""#include "{identifier}.h"
+
+const unsigned char {identifier}[] = {{
+{hex_text}
+}};
+
+const size_t {identifier}_len = sizeof({identifier});
+const char {identifier}_sha256[] = "{hash_hex}";
+"""
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print(f"Usage: {sys.argv[0]} -c|-c++ file1 [file2 ...]")
+        sys.exit(1)
+
+    mode = sys.argv[1]
+    if mode == "-c":
+        cpp_mode = False
+    elif mode == "-c++":
+        cpp_mode = True
+    else:
+        print("Error: first argument must be -c or -c++")
+        sys.exit(1)
+
+    for filename in sys.argv[2:]:
+        with open(filename, "rb") as f:
+            data = f.read()
+
+        identifier = to_c_identifier(filename)
+        size = len(data)
+        hash_hex = sha256_hex(data)
+
+        h_name = identifier + ".h"
+        c_name = identifier + (".cpp" if cpp_mode else ".c")
+
+        with open(h_name, "w") as f:
+            f.write(generate_header(identifier, filename, size, hash_hex, cpp_mode))
+
+        with open(c_name, "w") as f:
+            f.write(generate_source(identifier, data, hash_hex))
+
